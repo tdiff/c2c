@@ -69,6 +69,11 @@ static void writer()
     int bytes_processed = 0;
     while (bytes_processed < g_memory_size_bytes)
     {
+        {
+            std::unique_lock<std::mutex> lock(g_lock);
+            g_cond.wait(lock, [](){ return g_state == WRITE; });
+        }
+        
         init(g_cache_size_bytes);
         bytes_processed += g_cache_size_bytes;
 
@@ -76,7 +81,6 @@ static void writer()
             std::unique_lock<std::mutex> lock(g_lock);
             g_state = READ;
             g_cond.notify_all();
-            g_cond.wait(lock, [](){ return g_state == WRITE; });
         }
     }
 
