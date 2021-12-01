@@ -2,6 +2,7 @@
 #include <atomic>
 #include <iostream>
 #include <thread>
+#include <deque>
 #include <vector>
 #include <cstdint>
 #include <pthread.h>
@@ -10,13 +11,15 @@
 int g_writer_cpu = 1;
 int g_reader_cpu = 3;
 int g_tsc_khz = 2207999;
+int g_rdtsc_lat = 0;
+bool g_rdtsc_lat_adjust = true;
 
 int set_affinity(int cpu)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(cpu, &cpuset);
-    pthread_t current_thread = pthread_self();    
+    pthread_t current_thread = pthread_self();
     return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
@@ -43,7 +46,7 @@ void writer()
     set_affinity(1);
 
     int i = 1000000;
-    while (--i) {        
+    while (--i) {
         g_state.next = false;
         g_state.ts = rdtsc();
         while (! g_state.next) ;
@@ -51,17 +54,44 @@ void writer()
     g_state.ts = -1;
 }
 
+void measure_rdstc()
+{
+    uint64_t prev = 0;
+    int i = 10000000;
+    std::deque<int> res;
+    while (--i)
+    {
+        auto now = rdtsc();
+        res.push_back(now - prev);
+        prev = now;
+    }
+    res.pop_front();
+    std::sort(begin(res), end(res));
+    std::cout << "rdstc latency: min=" << res.front()
+              << " median=" << res[res.size()/2]
+              << " max=" << res.back() << '\n';
+    g_rdtsc_lat = res[res.size()/2];
+    std::cout << "rdtsc latency = " << g_rdtsc_lat << '\n';
+}
+
 void reader()
 {
     set_affinity(3);
 
+    if (g_rdtsc_lat_adjust)
+        measure_rdstc();
+
     std::vector<int64_t> results;
     while (true)
     {
-        while (! g_state.ts) continue;
-        if (g_state.ts == -1) break;
+        uint64_t ts;
+        while ( (ts = g_state.ts) == 0) continue;
+        if (ts == -1) break;
 
-        results.push_back(rdtsc() - g_state.ts);
+        auto now = rdtsc();
+        if (now < ts) std::cerr << "rdtsc warp\n";
+        results.push_back(now - ts);
+
         g_state.ts = 0;
         g_state.next = true;
     }
@@ -70,15 +100,15 @@ void reader()
     auto report = [](const char* name, uint64_t cycles){
         std::cout << name << ": " << cycles_to_ns(cycles) << " ns (" << cycles << ")\n";
     };
-    report("min", results.front());
-    report("median", results[results.size()/2]);
-    report("max", results.back());
+    report("min", results.front() - g_rdtsc_lat);
+    report("median", results[results.size()/2] - g_rdtsc_lat);
+    report("max", results.back() - g_rdtsc_lat);
 }
 
 int main(int argc, char** argv)
 {
     int opt;
-    while ((opt = getopt(argc, argv, "r:w:f:")) != -1)
+    while ((opt = getopt(argc, argv, "r:w:f:a")) != -1)
     {
         switch (opt)
         {
@@ -91,11 +121,15 @@ int main(int argc, char** argv)
         case 'f':
             g_tsc_khz = atoi(optarg);
             break;
+        case 'a':
+            g_rdtsc_lat_adjust = false;
+            break;
         default:
-            std::cerr << "Usage: " <<  argv[0] << " [-r cpu] [-w cpu] [-f size]\n"
+            std::cerr << "Usage: " <<  argv[0] << " [-r cpu] [-w cpu] [-f size] -a\n"
                       << "\t-w cpu affinity for read thread, default = 1\n"
                       << "\t-r cpu affinity for read thread, default = 3\n"
-                      << "\t-f tsc frequency obtained from dmesg, default value only makes sense on my machine\n";
+                      << "\t-f tsc frequency obtained from dmesg, default value only makes sense on my machine\n"
+                      << "\t -a do not substract estimated rdtsc latency from results\n";
             exit(EXIT_FAILURE);
         }
     }
