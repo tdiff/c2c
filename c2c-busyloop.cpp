@@ -2,7 +2,6 @@
 #include <atomic>
 #include <iostream>
 #include <thread>
-#include <deque>
 #include <vector>
 #include <cstdint>
 #include <pthread.h>
@@ -63,14 +62,13 @@ void measure_rdstc()
 {
     uint64_t prev = 0;
     int i = 10000000;
-    std::deque<int> res;
+    std::vector<int> res;
     while (--i)
     {
         auto now = rdtsc();
         res.push_back(now - prev);
         prev = now;
     }
-    res.pop_front();
     std::sort(begin(res), end(res));
     std::cout << "rdstc latency: min=" << res.front()
               << " median=" << res[res.size()/2]
