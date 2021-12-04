@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+constexpr int g_samples = 1000000;
 int g_writer_cpu = 1;
 int g_reader_cpu = 3;
 int g_tsc_khz = 2207999;
@@ -33,10 +34,15 @@ uint64_t cycles_to_ns(uint64_t cycles) {
     return cycles * 1000000 / g_tsc_khz;
 }
 
-struct State
+struct Line
 {
     std::atomic_uint64_t ts{0};
     char pad[56];
+};
+
+struct State
+{
+    Line lines[g_samples];
     std::atomic_bool next{true};
     std::atomic_bool stop{false};
 } g_state;
@@ -45,13 +51,12 @@ void writer()
 {
     set_affinity(1);
 
-    int i = 1000000;
-    while (--i) {
+    for (size_t i=0; i<g_samples; ++i)
+    {
         g_state.next = false;
-        g_state.ts = rdtsc();
+        g_state.lines[i].ts = rdtsc();
         while (! g_state.next) ;
     }
-    g_state.ts = -1;
 }
 
 void measure_rdstc()
@@ -82,17 +87,14 @@ void reader()
         measure_rdstc();
 
     std::vector<int64_t> results;
-    while (true)
+
+    for (size_t i=0; i<g_samples; ++i)
     {
         uint64_t ts;
-        while ( (ts = g_state.ts) == 0) continue;
-        if (ts == -1) break;
+        while ((ts = g_state.lines[i].ts) == 0) continue;
 
-        auto now = rdtsc();
-        if (now < ts) std::cerr << "rdtsc warp\n";
+        const auto now = rdtsc();
         results.push_back(now - ts);
-
-        g_state.ts = 0;
         g_state.next = true;
     }
 
@@ -129,7 +131,7 @@ int main(int argc, char** argv)
                       << "\t-w cpu affinity for read thread, default = 1\n"
                       << "\t-r cpu affinity for read thread, default = 3\n"
                       << "\t-f tsc frequency obtained from dmesg, default value only makes sense on my machine\n"
-                      << "\t -a do not substract estimated rdtsc latency from results\n";
+                      << "\t-a do not substract estimated rdtsc latency from results\n";
             exit(EXIT_FAILURE);
         }
     }
