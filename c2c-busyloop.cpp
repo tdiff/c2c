@@ -53,6 +53,17 @@ void writer()
     for (size_t i=0; i<g_samples; ++i)
     {
         g_state.next = false;
+        /*
+         Еry to get exclusive ownership of this line before reading tsc.
+         It adds another xchg before rdtsc:
+         
+            xchg    rax, QWORD PTR [rsi]
+            rdtsc
+
+         It may not always help as reader can move this line to shared before rdtsc call, but
+         it at least it loads this line into writer cpu's cache.
+        */
+        g_state.lines[i].ts = 0;
         g_state.lines[i].ts = rdtsc();
         while (! g_state.next) ;
     }
@@ -70,7 +81,7 @@ void measure_rdstc()
         prev = now;
     }
     std::sort(begin(res), end(res));
-    std::cout << "rdstc latency: min=" << res.front()
+    std::cout << "rdstc latency: min=" << *std::next(res.begin())
               << " median=" << res[res.size()/2]
               << " max=" << res.back() << '\n';
     g_rdtsc_lat = res[res.size()/2];
