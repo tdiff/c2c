@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 #include <cstdint>
+#include <cstring>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -14,13 +15,19 @@ int g_tsc_khz = 2207999;
 int g_rdtsc_lat = 0;
 bool g_rdtsc_lat_adjust = true;
 
-int set_affinity(int cpu)
+void set_affinity(int cpu)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(cpu, &cpuset);
     pthread_t current_thread = pthread_self();
-    return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+
+    if (int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset)) {
+        fprintf(stderr, "%s\n", strerror(rc));
+        exit(1);
+    }
+
+    pthread_yield();
 }
 
 uint64_t rdtsc(){
@@ -63,25 +70,36 @@ void writer()
          It may not always help as reader can move this line to shared before rdtsc call, but
          it at least it loads this line into writer cpu's cache.
         */
+#if 0
         g_state.lines[i].ts = 0;
+#elif 1
+        g_state.lines[i].ts.store(0, std::memory_order_relaxed);
+#else
+	// nothing
+#endif
+#if 0
         g_state.lines[i].ts = rdtsc();
+#else
+        g_state.lines[i].ts.store(rdtsc(), std::memory_order_relaxed);
+#endif
         while (! g_state.next) ;
     }
 }
 
 void measure_rdstc()
 {
-    uint64_t prev = 0;
+    std::vector<long> res;
+
     int i = 10000000;
-    std::vector<int> res;
     while (--i)
     {
-        auto now = rdtsc();
-        res.push_back(now - prev);
-        prev = now;
+        auto ts1 = rdtsc();
+        auto ts2 = rdtsc();
+        res.push_back(ts2 - ts1);
     }
+
     std::sort(begin(res), end(res));
-    std::cout << "rdstc latency: min=" << *std::next(res.begin())
+    std::cout << "rdstc latency: min=" << res.front()
               << " median=" << res[res.size()/2]
               << " max=" << res.back() << '\n';
     g_rdtsc_lat = res[res.size()/2];
